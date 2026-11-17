@@ -1,0 +1,388 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Proje dosyalarini olustur
+        run: |
+          cat > settings.gradle.kts <<'WA_EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "WASticker"
+          include(":app")
+          WA_EOF
+          cat > build.gradle.kts <<'WA_EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          WA_EOF
+          cat > gradle.properties <<'WA_EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          WA_EOF
+          mkdir -p app
+          cat > app/build.gradle.kts <<'WA_EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.example.wasticker"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.example.wasticker"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          WA_EOF
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'WA_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <queries>
+                  <package android:name="com.whatsapp" />
+                  <package android:name="com.whatsapp.w4b" />
+              </queries>
+              <application
+                  android:label="WA Sticker"
+                  android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <provider
+                      android:name=".StickerContentProvider"
+                      android:authorities="${applicationId}.stickercontentprovider"
+                      android:enabled="true"
+                      android:exported="true"
+                      android:readPermission="com.whatsapp.sticker.READ" />
+              </application>
+          </manifest>
+          WA_EOF
+          mkdir -p app/src/main/assets
+          cat > app/src/main/assets/index.html <<'WA_EOF'
+          <!doctype html>
+          <html lang="tr"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>WA Sticker</title>
+          <style>
+          :root{--bg:#f3f4f1;--fg:#171a17;--cd:#fff;--mu:#667066;--ac:#0f8a4b;--bd:#d8ddd6}
+          @media(prefers-color-scheme:dark){:root{--bg:#0f1210;--fg:#e9eee9;--cd:#181c19;--mu:#93a093;--ac:#2fd072;--bd:#2a312b}}
+          *{box-sizing:border-box}
+          body{margin:0 auto;padding:14px;max-width:480px;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,sans-serif}
+          h1{font-size:22px;margin:6px 0 14px}
+          section{background:var(--cd);border:1px solid var(--bd);border-radius:14px;padding:12px;margin-bottom:12px}
+          input,button{display:block;width:100%;margin-top:8px;padding:11px;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:10px}
+          button{background:var(--ac);color:#fff;border:0;font-weight:600}
+          button:disabled{opacity:.4}
+          #cv{width:100%;aspect-ratio:1;border-radius:10px;background:repeating-conic-gradient(#8884 0 25%,#0000 0 50%) 0/20px 20px}
+          #g{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px}
+          figure{margin:0;position:relative}
+          figure img{width:100%;aspect-ratio:1;border-radius:8px;background:var(--bg)}
+          figure b{position:absolute;top:-6px;right:-6px;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:#d93a35;color:#fff}
+          small{color:var(--mu)}
+          #t{position:fixed;left:14px;right:14px;bottom:18px;padding:12px;border-radius:10px;background:var(--fg);color:var(--bg);opacity:0;transition:opacity .2s;pointer-events:none}
+          </style></head><body>
+          <h1>Sticker stüdyosu</h1>
+          <section>
+            <input id="pn" placeholder="Paket adı"><input id="au" placeholder="Yapımcı adı">
+          </section>
+          <section>
+            <canvas id="cv" width="512" height="512"></canvas>
+            <input id="f" type="file" accept="image/*">
+            <input id="z" type="range" min="30" max="250" value="100" aria-label="Yakınlaştır">
+            <input id="tx" placeholder="Yazı (isteğe bağlı)">
+            <input id="em" value="😀" aria-label="Emoji">
+            <button id="add">Pakete ekle</button>
+          </section>
+          <section>
+            <b id="n">0 / 30</b> <small>en az 3 sticker gerekli</small>
+            <div id="g"></div>
+            <button id="pub" disabled style="margin-top:14px">WhatsApp'a ekle</button>
+          </section>
+          <div id="t"></div>
+          <script>
+          const $=i=>document.getElementById(i),A=window.Android,ctx=$('cv').getContext('2d');
+          let img=null;
+          function toast(m){const t=$('t');t.textContent=m;t.style.opacity=1;setTimeout(()=>t.style.opacity=0,2600)}
+          function draw(){
+            ctx.clearRect(0,0,512,512);
+            if(img){const s=Math.min(512/img.width,512/img.height)*$('z').value/100,w=img.width*s,h=img.height*s;
+              ctx.drawImage(img,(512-w)/2,(512-h)/2,w,h)}
+            const t=$('tx').value;
+            if(t){ctx.font='bold 72px sans-serif';ctx.textAlign='center';ctx.textBaseline='bottom';
+              ctx.lineWidth=10;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle='#fff';
+              ctx.strokeText(t,256,500,480);ctx.fillText(t,256,500,480)}
+          }
+          function enc(){let q=.9,u;do{u=$('cv').toDataURL('image/webp',q);q-=.1}while(u.length*.75>95000&&q>.05);return u.split(',')[1]}
+          function refresh(){
+            const n=A.count(),g=$('g');$('n').textContent=n+' / 30';g.innerHTML='';
+            for(let i=0;i<n;i++){
+              const f=document.createElement('figure'),m=new Image(),x=document.createElement('b');
+              m.src='data:image/webp;base64,'+A.getData(i);x.textContent='×';x.onclick=()=>{A.remove(i);refresh()};
+              f.append(m,x);g.append(f)}
+            $('pub').disabled=n<3;
+          }
+          $('f').onchange=e=>{const x=e.target.files[0];if(!x)return;const i=new Image();i.onload=()=>{img=i;draw()};i.src=URL.createObjectURL(x)};
+          $('z').oninput=draw;$('tx').oninput=draw;
+          $('add').onclick=()=>{
+            if(!A)return toast('Bu ekran sadece APK içinde çalışır');
+            if(!img&&!$('tx').value)return toast('Önce bir görsel seç veya yazı gir');
+            const r=A.addSticker(enc(),$('em').value);
+            if(r!=='ok')return toast(r);
+            toast('Eklendi');refresh()};
+          $('pub').onclick=()=>{
+            try{localStorage.pn=$('pn').value;localStorage.au=$('au').value}catch(e){}
+            const r=A.publish($('pn').value,$('au').value);if(r!=='ok')toast(r)};
+          try{$('pn').value=localStorage.pn||'Sticker Paketim';$('au').value=localStorage.au||''}catch(e){}
+          draw();if(A)refresh();
+          </script></body></html>
+          WA_EOF
+          mkdir -p app/src/main/java/com/example/wasticker
+          cat > app/src/main/java/com/example/wasticker/MainActivity.kt <<'WA_EOF'
+          package com.example.wasticker
+
+          import android.annotation.SuppressLint
+          import android.app.Activity
+          import android.content.ActivityNotFoundException
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Bundle
+          import android.util.Base64
+          import android.webkit.*
+          import android.widget.Toast
+          import org.json.JSONObject
+          import java.io.File
+
+          class MainActivity : Activity() {
+              private lateinit var web: WebView
+              private var fileCb: ValueCallback<Array<Uri>>? = null
+              private val dir get() = Store.dir(this)
+
+              @SuppressLint("SetJavaScriptEnabled")
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  web = WebView(this)
+                  setContentView(web)
+                  web.settings.javaScriptEnabled = true
+                  web.settings.domStorageEnabled = true
+                  web.addJavascriptInterface(Bridge(), "Android")
+                  web.webChromeClient = object : WebChromeClient() {
+                      override fun onShowFileChooser(w: WebView, cb: ValueCallback<Array<Uri>>, p: FileChooserParams): Boolean {
+                          fileCb?.onReceiveValue(null)
+                          fileCb = cb
+                          startActivityForResult(
+                              Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), 1
+                          )
+                          return true
+                      }
+                  }
+                  web.loadUrl("file:///android_asset/index.html")
+              }
+
+              @Deprecated("Deprecated in Java")
+              override fun onActivityResult(r: Int, c: Int, d: Intent?) {
+                  if (r == 1) {
+                      fileCb?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(c, d))
+                      fileCb = null
+                  }
+                  val err = d?.getStringExtra("validation_error")
+                  if (r == 2 && err != null) Toast.makeText(this, err, Toast.LENGTH_LONG).show()
+              }
+
+              inner class Bridge {
+                  @JavascriptInterface
+                  fun count(): Int = Store.read(this@MainActivity).getJSONArray("stickers").length()
+
+                  @JavascriptInterface
+                  fun getData(i: Int): String {
+                      val f = Store.read(this@MainActivity).getJSONArray("stickers").getJSONObject(i).getString("file")
+                      return Base64.encodeToString(File(dir, f).readBytes(), Base64.NO_WRAP)
+                  }
+
+                  @JavascriptInterface
+                  fun addSticker(b64: String, emoji: String): String {
+                      val bytes = Base64.decode(b64, Base64.DEFAULT)
+                      if (bytes.size > 100_000) return "Sticker 100 KB'dan büyük, görseli sadeleştir."
+                      val p = Store.read(this@MainActivity)
+                      val arr = p.getJSONArray("stickers")
+                      if (arr.length() >= 30) return "En fazla 30 sticker eklenebilir."
+                      val name = "s${System.currentTimeMillis()}.webp"
+                      File(dir, name).writeBytes(bytes)
+                      arr.put(JSONObject().put("file", name).put("emoji", emoji.trim().ifEmpty { "😀" }))
+                      Store.write(this@MainActivity, p)
+                      return "ok"
+                  }
+
+                  @JavascriptInterface
+                  fun remove(i: Int) {
+                      val p = Store.read(this@MainActivity)
+                      val arr = p.getJSONArray("stickers")
+                      File(dir, arr.getJSONObject(i).getString("file")).delete()
+                      arr.remove(i)
+                      Store.write(this@MainActivity, p)
+                  }
+
+                  @JavascriptInterface
+                  fun publish(name: String, author: String): String {
+                      val p = Store.read(this@MainActivity)
+                      if (p.getJSONArray("stickers").length() < 3) return "En az 3 sticker gerekli."
+                      if (name.isBlank() || author.isBlank()) return "Paket ve yapımcı adı boş olamaz."
+                      p.put("name", name.trim()).put("author", author.trim())
+                      Store.write(this@MainActivity, p)
+                      Store.makeTray(this@MainActivity)
+                      runOnUiThread {
+                          try {
+                              startActivityForResult(
+                                  Intent("com.whatsapp.intent.action.ENABLE_STICKER_PACK")
+                                      .putExtra("sticker_pack_id", Store.ID)
+                                      .putExtra("sticker_pack_authority", Store.authority(this@MainActivity))
+                                      .putExtra("sticker_pack_name", name.trim()), 2
+                              )
+                          } catch (e: ActivityNotFoundException) {
+                              Toast.makeText(this@MainActivity, "WhatsApp bulunamadı.", Toast.LENGTH_LONG).show()
+                          }
+                      }
+                      return "ok"
+                  }
+              }
+          }
+          WA_EOF
+          mkdir -p app/src/main/java/com/example/wasticker
+          cat > app/src/main/java/com/example/wasticker/StickerContentProvider.kt <<'WA_EOF'
+          package com.example.wasticker
+
+          import android.content.ContentProvider
+          import android.content.ContentValues
+          import android.content.Context
+          import android.content.UriMatcher
+          import android.content.res.AssetFileDescriptor
+          import android.database.Cursor
+          import android.database.MatrixCursor
+          import android.graphics.Bitmap
+          import android.graphics.BitmapFactory
+          import android.net.Uri
+          import android.os.ParcelFileDescriptor
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.io.File
+
+          /** Paket verisi: filesDir/pack altında pack.json + webp dosyaları + tray.png */
+          object Store {
+              const val ID = "my_sticker_pack"
+              fun authority(c: Context) = c.packageName + ".stickercontentprovider"
+              fun dir(c: Context) = File(c.filesDir, "pack").apply { mkdirs() }
+
+              fun read(c: Context): JSONObject = try {
+                  JSONObject(File(dir(c), "pack.json").readText())
+              } catch (e: Exception) {
+                  JSONObject().put("name", "Sticker Paketim").put("author", "Ben")
+                      .put("version", "1").put("stickers", JSONArray())
+              }
+
+              fun write(c: Context, o: JSONObject) {
+                  o.put("version", System.currentTimeMillis().toString()) // WhatsApp önbelleği için
+                  File(dir(c), "pack.json").writeText(o.toString())
+              }
+
+              fun makeTray(c: Context) {
+                  val s = read(c).getJSONArray("stickers")
+                  val bmp = BitmapFactory.decodeFile(File(dir(c), s.getJSONObject(0).getString("file")).path) ?: return
+                  val small = Bitmap.createScaledBitmap(bmp, 96, 96, true)
+                  File(dir(c), "tray.png").outputStream().use { small.compress(Bitmap.CompressFormat.PNG, 100, it) }
+              }
+          }
+
+          class StickerContentProvider : ContentProvider() {
+              private lateinit var matcher: UriMatcher
+
+              override fun onCreate(): Boolean {
+                  val a = Store.authority(context!!)
+                  matcher = UriMatcher(UriMatcher.NO_MATCH).apply {
+                      addURI(a, "metadata", 1)
+                      addURI(a, "metadata/*", 1)
+                      addURI(a, "stickers/*", 2)
+                      addURI(a, "stickers_asset/*/*", 3)
+                  }
+                  return true
+              }
+
+              override fun query(uri: Uri, p: Array<String>?, s: String?, sa: Array<String>?, o: String?): Cursor? {
+                  val pack = Store.read(context!!)
+                  val cur = when (matcher.match(uri)) {
+                      1 -> MatrixCursor(arrayOf(
+                          "sticker_pack_identifier", "sticker_pack_name", "sticker_pack_publisher",
+                          "sticker_pack_icon", "android_play_store_link", "ios_app_download_link",
+                          "sticker_pack_publisher_email", "sticker_pack_publisher_website",
+                          "sticker_pack_privacy_policy_website", "sticker_pack_license_agreement_website",
+                          "image_data_version", "whatsapp_will_not_cache_stickers", "animated_sticker_pack"
+                      )).apply {
+                          addRow(arrayOf<Any>(
+                              Store.ID, pack.getString("name"), pack.getString("author"), "tray.png",
+                              "", "", "", "", "", "", pack.getString("version"), 0, 0
+                          ))
+                      }
+                      2 -> MatrixCursor(arrayOf("sticker_file_name", "sticker_emoji", "sticker_accessibility_text")).apply {
+                          val arr = pack.getJSONArray("stickers")
+                          for (i in 0 until arr.length()) {
+                              val st = arr.getJSONObject(i)
+                              addRow(arrayOf<Any>(st.getString("file"), st.getString("emoji"), ""))
+                          }
+                      }
+                      else -> return null
+                  }
+                  cur.setNotificationUri(context!!.contentResolver, uri)
+                  return cur
+              }
+
+              override fun openAssetFile(uri: Uri, mode: String): AssetFileDescriptor? {
+                  if (matcher.match(uri) != 3) return null
+                  val name = uri.pathSegments[2]
+                  if (name.contains("/")) return null
+                  val f = File(Store.dir(context!!), name)
+                  if (!f.exists()) return null
+                  return AssetFileDescriptor(ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY), 0, f.length())
+              }
+
+              override fun getType(uri: Uri): String? {
+                  val a = Store.authority(context!!)
+                  return when (matcher.match(uri)) {
+                      1 -> "vnd.android.cursor.dir/vnd.$a.metadata"
+                      2 -> "vnd.android.cursor.dir/vnd.$a.stickers"
+                      3 -> if (uri.lastPathSegment!!.endsWith(".png")) "image/png" else "image/webp"
+                      else -> null
+                  }
+              }
+
+              override fun insert(uri: Uri, v: ContentValues?): Uri? = null
+              override fun delete(uri: Uri, s: String?, a: Array<String>?) = 0
+              override fun update(uri: Uri, v: ContentValues?, s: String?, a: Array<String>?) = 0
+          }
+          WA_EOF
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WASticker-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
